@@ -342,6 +342,14 @@ export default function CaptivePortal() {
         {deviceMac && <><span>Device: {deviceMac}</span> &nbsp;·&nbsp; </>}
         net4sats
       </p>
+      <div style={{ marginTop: '0.5rem', display: 'flex', gap: '0.75rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+        <a href={`http://${window.location.hostname}:8090/#/login`} style={{ fontSize: 'var(--font-size-xsmall, 11px)', color: 'var(--text-dim, #888)', textDecoration: 'none', opacity: 0.7 }}>
+          Admin
+        </a>
+        <a href={`http://${window.location.hostname}:8080/`} style={{ fontSize: 'var(--font-size-xsmall, 11px)', color: 'var(--text-dim, #888)', textDecoration: 'none', opacity: 0.7 }}>
+          LuCI
+        </a>
+      </div>
     </div>
   );
 
