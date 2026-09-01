@@ -205,6 +205,15 @@ export default function CaptivePortal() {
       setCashuValidation(null);
       return;
     }
+    // The accepted-mint membership check is intentionally left to the backend
+    // (source of truth: it knows all 7 accepted mints). The portal only learns
+    // a single pricing mint (pricing.mintUrl) from kind-10021; restricting the
+    // client gate to that one mint would falsely reject tokens from the other
+    // accepted mints (portal-rejects/backend-accepts divergence — the opposite
+    // trap this hardening guards against). validateCashuToken's fail-closed
+    // mint gate (missing mint -> rejected) and its optional acceptedMints
+    // comparison (correct backend-matching normalization) remain available for
+    // callers that do hold the full list.
     const result = validateCashuToken(val);
     setCashuValidation(result);
     if (!result.valid) {
