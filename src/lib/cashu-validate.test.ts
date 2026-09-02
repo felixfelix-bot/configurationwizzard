@@ -44,6 +44,7 @@ let V0_TOKEN: string; // v0 keyset, sat -> regression guard
 let USD_TOKEN: string; // v2 keyset, usd -> must be rejected
 let NO_UNIT_TOKEN: string; // unit absent -> default sat
 let NO_MINT_TOKEN: string; // mint absent (CBOR lacks m) -> fail closed
+let V3_TOKEN: string; // V3 cashuA (b64-JSON) encoding -> dual-encoding coverage
 
 beforeAll(() => {
   V0_TOKEN = getEncodedToken({
@@ -69,6 +70,14 @@ beforeAll(() => {
     proofs: [p(V0_KEYSET, 5, 's-nomint')],
     unit: 'sat',
   } as any);
+  // V3 cashuA fixture: "cashuA" + base64(JSON). getEncodedToken only emits
+  // V4 cashuB (CBOR), so build the V3 form by hand to exercise the OTHER
+  // encoding end-to-end through the hardened path.
+  const v3json = {
+    token: [{ mint: SAT_MINT, proofs: [p(V2_KEYSET, 5, 's-v3')] }],
+    unit: 'sat',
+  };
+  V3_TOKEN = 'cashuA' + Buffer.from(JSON.stringify(v3json)).toString('base64');
 });
 
 const MALFORMED_TOKEN = 'cashuB...not-valid!!';
@@ -86,6 +95,17 @@ describe('validateCashuToken', () => {
     // Pre-fix this throws inside getDecodedToken -> returns "Could not decode"
     // (RED). Post-fix getTokenMetadata decodes it.
     const res = validateCashuToken(V2_TOKEN);
+    expect(res.valid).toBe(true);
+    expect(res.amount).toBe(5);
+    expect(res.proofCount).toBe(1);
+    expect(res.mint).toBe(SAT_MINT);
+  });
+
+  it('accepts a V3 cashuA (b64-JSON) token end-to-end', () => {
+    // Dual-encoding coverage: getEncodedToken only emits V4 cashuB (CBOR).
+    // A V3 cashuA token (base64 JSON) must also validate through the hardened
+    // path — prior work never recorded which encoding was exercised.
+    const res = validateCashuToken(V3_TOKEN);
     expect(res.valid).toBe(true);
     expect(res.amount).toBe(5);
     expect(res.proofCount).toBe(1);
@@ -148,10 +168,41 @@ describe('normalizeMintUrl', () => {
     expect(normalizeMintUrl('https://Mint.Minibits.Cash/Bitcoin/')).toBe(
       'https://mint.minibits.cash/Bitcoin',
     );
-    expect(normalizeMintUrl('https://mint.coinos.io/')).toBe('https://mint.coinos.io');
+    // Backend normalizePath maps an empty path to "/", so a bare origin keeps
+    // its root slash (mirrors MintURLMatches, not over-normalized).
+    expect(normalizeMintUrl('https://mint.coinos.io/')).toBe('https://mint.coinos.io/');
   });
 
   it('returns empty string for unparseable input', () => {
     expect(normalizeMintUrl('not a url')).toBe('');
+  });
+
+  // Backend parity: tollgate-module-basic-go MintURLMatches uses
+  // url.Parse + EqualFold(host) + normalizePath, where normalizePath strips
+  // exactly ONE trailing slash (empty path -> "/"). Mirror that exactly so
+  // the portal accepts precisely what the backend accepts.
+  it('mirrors backend normalizePath: strips exactly one trailing slash', () => {
+    // "/Bitcoin//" -> backend normalizePath -> "/Bitcoin/" (one slash stripped),
+    // which is NOT equal to "/Bitcoin". Portal must not over-normalize.
+    expect(normalizeMintUrl('https://mint.example.com/Bitcoin//')).toBe(
+      'https://mint.example.com/Bitcoin/',
+    );
+  });
+
+  it('mirrors backend normalizePath: empty path normalizes to root slash', () => {
+    // Backend normalizePath("") -> "/". A bare origin with no path must
+    // normalize to the root path, not an empty path.
+    expect(normalizeMintUrl('https://mint.example.com')).toBe(
+      'https://mint.example.com/',
+    );
+  });
+
+  it('mirrors backend scheme sensitivity: http vs https differ', () => {
+    expect(normalizeMintUrl('http://mint.example.com/Bitcoin')).toBe(
+      'http://mint.example.com/Bitcoin',
+    );
+    expect(normalizeMintUrl('http://mint.example.com/Bitcoin')).not.toBe(
+      normalizeMintUrl('https://mint.example.com/Bitcoin'),
+    );
   });
 });
