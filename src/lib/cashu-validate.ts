@@ -36,12 +36,12 @@ export interface CashuValidationResult {
  * Normalize a mint URL the same way the backend treats them, so a portal-side
  * accepted-mint comparison does not diverge from what the backend will accept.
  *
- * Mirror of the canonical comparison used by tollgate-module-basic-go: mints
- * are stored/compare via Go's `url.Parse(url).String()`, which strips the
- * trailing `/` (leaving a bare origin like `https://mint.coinos.io`) and
- * lowercases the host while preserving the path (e.g. minibits'
- * `https://mint.minibits.cash/Bitcoin` keeps `/Bitcoin`). We reproduce that:
- * lowercase host + strip trailing slashes, keep the path.
+ * Mirror of the canonical comparison used by tollgate-module-basic-go
+ * (MintURLMatches, src/tollwallet/tollwallet.go): both URLs are parsed, the
+ * host is compared case-insensitively (EqualFold), the scheme exactly, and the
+ * path via normalizePath — which strips exactly ONE trailing slash and treats
+ * an empty path as "/". We reproduce that: lowercase host, keep the scheme,
+ * strip a single trailing slash from the path, and map an empty path to "/".
  *
  * @param mint raw mint URL
  * @returns normalized URL, or '' if unparseable
@@ -54,7 +54,10 @@ export function normalizeMintUrl(mint: string): string {
     const host = u.hostname.toLowerCase();
     // hostname lowercases; also fold in any explicit port. No userinfo.
     const authority = host + (u.port ? `:${u.port}` : '');
-    let path = u.pathname.replace(/\/+$/, ''); // strip trailing slashes
+    // Backend normalizePath: strip exactly ONE trailing slash; empty path -> "/".
+    let path = u.pathname;
+    if (path.length > 1 && path.endsWith('/')) path = path.slice(0, -1);
+    if (path === '') path = '/';
     return `${u.protocol}//${authority}${path}`;
   } catch {
     return '';
