@@ -63,8 +63,8 @@ define Package/configurationwizzard/install
 	$(CP) $(PKG_MAKEFILE_DIR)dist/admin/* $(1)/www/net4sats/
 
 	# Ship the captive portal in our own directory; postinst repoints the
-	# NoDogSplash htdocs symlink at it. This avoids fighting tollgate-wrt over
-	# the htdocs symlink and the files under its tollgate-captive-portal-site.
+	# uhttpd.portal home directory at it. We do NOT touch
+	# /etc/nodogsplash/htdocs — that redirect stub is owned by tollgate-wrt.
 	$(INSTALL_DIR) $(1)/etc/tollgate/net4sats-captive-portal-site
 	$(CP) $(PKG_MAKEFILE_DIR)dist/portal/* $(1)/etc/tollgate/net4sats-captive-portal-site/
 
@@ -81,20 +81,6 @@ endef
 define Package/configurationwizzard/postinst
 #!/bin/sh
 
-if ! uci -q get uhttpd.net4sats >/dev/null 2>&1; then
-    uci set uhttpd.net4sats=uhttpd
-    uci set uhttpd.net4sats.home='/www'
-    uci set uhttpd.net4sats.ubus_prefix='/ubus'
-    uci set uhttpd.net4sats.script_timeout='60'
-    uci set uhttpd.net4sats.network_timeout='30'
-    uci set uhttpd.net4sats.max_requests='3'
-    uci set uhttpd.net4sats.tcp_keepalive='1'
-    uci set uhttpd.net4sats.error_page='/net4sats/index.html'
-    uci add_list uhttpd.net4sats.listen_http='0.0.0.0:80'
-    uci add_list uhttpd.net4sats.listen_http='[::]:80'
-    uci commit uhttpd
-fi
-
 if uci -q get nodogsplash.@nodogsplash[0] >/dev/null 2>&1; then
     uci set nodogsplash.@nodogsplash[0].gatewayport='2050'
     nds_users="$(uci -q get nodogsplash.@nodogsplash[0].users_to_router 2>/dev/null || echo '')"
@@ -104,6 +90,15 @@ if uci -q get nodogsplash.@nodogsplash[0] >/dev/null 2>&1; then
     uci commit nodogsplash
 fi
 
+# Repoint the uhttpd.portal instance (set up by tollgate-wrt on :2051)
+# at our captive portal SPA instead of tollgate-wrt's default portal.
+# We do NOT touch /etc/nodogsplash/htdocs — that redirect stub is owned
+# by tollgate-wrt's 90-tollgate-captive-portal-symlink script.
+if uci -q get uhttpd.portal >/dev/null 2>&1; then
+    uci set uhttpd.portal.home='/etc/tollgate/net4sats-captive-portal-site'
+    uci commit uhttpd
+fi
+
 # Resolve .apk-new files left by apk when existing files were modified
 # (e.g. by tollgate-wrt symlink management or sysupgrade preservation).
 find /etc/tollgate/net4sats-captive-portal-site /www/net4sats -name '*.apk-new' \
@@ -111,13 +106,6 @@ find /etc/tollgate/net4sats-captive-portal-site /www/net4sats -name '*.apk-new' 
 
 /etc/init.d/rpcd restart
 /etc/init.d/uhttpd restart
-
-# Point NoDogSplash at the net4sats captive portal (repoint the htdocs symlink
-# that tollgate-wrt manages at our portal directory).
-if [ -d /etc/tollgate/net4sats-captive-portal-site ]; then
-    rm -rf /etc/nodogsplash/htdocs
-    ln -s /etc/tollgate/net4sats-captive-portal-site /etc/nodogsplash/htdocs
-fi
 
 /etc/init.d/nodogsplash restart 2>/dev/null || true
 endef

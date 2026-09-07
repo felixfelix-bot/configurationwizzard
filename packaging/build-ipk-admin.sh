@@ -35,6 +35,15 @@ mkdir -p "$CTRL_DIR" "$DATA_DIR"
 mkdir -p "$DATA_DIR/www/net4sats"
 cp -r "$BUILD_DIR/admin/." "$DATA_DIR/www/net4sats/"
 
+# Install balance page (if built separately, merge into admin package)
+if [ -d "$BUILD_DIR/balance" ]; then
+  cp "$BUILD_DIR/balance/balance.html" "$DATA_DIR/www/net4sats/balance.html"
+  mkdir -p "$DATA_DIR/www/net4sats/assets"
+  cp "$BUILD_DIR/balance/assets/balance-"*.js "$DATA_DIR/www/net4sats/assets/" 2>/dev/null || true
+  cp "$BUILD_DIR/balance/assets/balance-"*.css "$DATA_DIR/www/net4sats/assets/" 2>/dev/null || true
+  echo "  Balance page included in IPK"
+fi
+
 # Install rpcd plugin for tollgate CLI integration
 mkdir -p "$DATA_DIR/usr/libexec/rpcd"
 cp "$REPO_ROOT/openwrt/rpcd/tollgate" "$DATA_DIR/usr/libexec/rpcd/tollgate"

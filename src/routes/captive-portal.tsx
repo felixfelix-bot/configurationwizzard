@@ -5,15 +5,18 @@ import {
   payCashu,
   createLnInvoice,
   pollLnInvoice,
+  GatewaySetupError,
+  getClientMacFromUrl,
   type PricingInfo,
   type PaymentResult,
   computeSizeOptions,
 } from '../lib/payment-api';
 import { generateQRSVG } from '../lib/qr';
 import { validateCashuToken, type CashuValidationResult } from '../lib/cashu-validate';
+import { isTokenPayable } from '../lib/cashu-payable';
 
 type Tab = 'lightning' | 'cashu';
-type PortalPhase = 'loading' | 'select' | 'success' | 'error';
+type PortalPhase = 'loading' | 'select' | 'success' | 'error' | 'setup';
 
 interface SizeOption {
   label: string;
@@ -27,6 +30,9 @@ function formatSats(v: number): string {
 function formatAllotment(metric: string, allotment: number): string {
   if (metric === 'milliseconds') {
     const mins = Math.round(allotment / 60000);
+    if (mins < 1) {
+      return `${Math.max(1, Math.round(allotment / 1000))} sec`;
+    }
     if (mins >= 60) {
       const h = Math.floor(mins / 60);
       const m = mins % 60;
@@ -35,6 +41,9 @@ function formatAllotment(metric: string, allotment: number): string {
     return `${mins} min`;
   }
   const mb = allotment / 1048576;
+  if (mb < 1) {
+    return `${Math.max(1, Math.round(allotment / 1024))} KB`;
+  }
   if (mb >= 1024) {
     const gb = mb / 1024;
     return gb >= 10 ? `${gb.toFixed(0)} GB` : `${gb.toFixed(1)} GB`;
@@ -75,6 +84,7 @@ export default function CaptivePortal() {
   const [deviceMac, setDeviceMac] = useState('');
   const [grantedText, setGrantedText] = useState('');
   const [pageError, setPageError] = useState('');
+  const [setupMessage, setSetupMessage] = useState('Setting up payment system, please wait...');
 
   const [cashuToken, setCashuToken] = useState('');
   const [cashuError, setCashuError] = useState('');
@@ -88,6 +98,7 @@ export default function CaptivePortal() {
   const [lnTestMint, setLnTestMint] = useState(false);
   const [lnQuoteId, setLnQuoteId] = useState('');
   const [lnError, setLnError] = useState('');
+  const [selectedMintUrl, setSelectedMintUrl] = useState('');
 
   const moreRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<number | null>(null);
@@ -95,10 +106,14 @@ export default function CaptivePortal() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      // Prefer clientmac from URL (nodogsplash preauth) over whoami
+      const urlMac = getClientMacFromUrl();
+      if (urlMac) setDeviceMac(urlMac);
+
       try {
         const [pr, mac] = await Promise.allSettled([
           fetchPricing(),
-          fetchWhoami(),
+          urlMac ? Promise.resolve(urlMac) : fetchWhoami(),
         ]);
 
         if (cancelled) return;
@@ -111,15 +126,44 @@ export default function CaptivePortal() {
             setSelectedSats(opts[0].sats);
             setSelectedIdx(0);
           }
+          // Default to the first mint URL from pricing
+          if (pr.value.mintUrls.length > 0) {
+            setSelectedMintUrl(pr.value.mintUrls[0]);
+          } else if (pr.value.mintUrl) {
+            setSelectedMintUrl(pr.value.mintUrl);
+          }
+          // If the selected mint does not support Lightning (new backend with
+          // PR #181 where supports_ln is authoritative), land the user on the
+          // Cashu tab and grey-out Lightning instead of letting them hit a
+          // guaranteed invoice failure.
+          if (!pr.value.supportsLN) {
+            setTab('cashu');
+          }
         } else {
+          const reason = pr.reason;
+          if (reason instanceof GatewaySetupError) {
+            // kind:21023 — gateway booted before WAN/mints came up, or every
+            // mint is down. Show a friendly setup message and stop retrying
+            // silently so the user understands the router is still starting.
+            setSetupMessage(reason.message || 'Setting up payment system, please wait...');
+            setTimeout(() => { if (!cancelled) setPhase('setup'); }, 400);
+            if (mac.status === 'fulfilled') setDeviceMac(mac.value);
+            return;
+          }
           setPageError('Could not load pricing from gateway');
         }
 
         if (mac.status === 'fulfilled') {
           setDeviceMac(mac.value);
         }
-      } catch {
-        if (!cancelled) setPageError('Failed to connect to gateway');
+      } catch (err: any) {
+        if (cancelled) return;
+        if (err instanceof GatewaySetupError) {
+          setSetupMessage(err.message || 'Setting up payment system, please wait...');
+          setTimeout(() => { if (!cancelled) setPhase('setup'); }, 400);
+          return;
+        }
+        setPageError('Failed to connect to gateway');
       }
       setTimeout(() => {
         if (!cancelled) setPhase('select');
@@ -155,7 +199,7 @@ export default function CaptivePortal() {
   useEffect(() => {
     if (phase !== 'success') return;
     const t = setTimeout(() => {
-      window.location.href = `http://${window.location.hostname}:8090/net4sats/balance.html`;
+      window.location.href = `http://${window.location.hostname}:8090/balance.html`;
     }, 0);
     return () => clearTimeout(t);
   }, [phase]);
@@ -222,11 +266,12 @@ export default function CaptivePortal() {
   }, [handleCashuInput]);
 
   const handleCashuPay = useCallback(async () => {
-    if (!cashuValidation?.valid || !pricing) return;
+    if (!cashuValidation?.valid || !pricing || !isCashuPayable) return;
+    if (!cashuToken.trim()) return;
     setCashuPaying(true);
     setCashuError('');
     try {
-      const result: PaymentResult = await payCashu(cashuToken.trim());
+      const result: PaymentResult = await payCashu(cashuToken.trim(), deviceMac || undefined);
       if (result.ok) {
         setGrantedText(formatAllotment(result.session.metric, result.session.allotment));
         setPhase('success');
@@ -238,7 +283,28 @@ export default function CaptivePortal() {
     } finally {
       setCashuPaying(false);
     }
-  }, [cashuToken, cashuValidation, pricing]);
+  }, [cashuToken, cashuValidation, pricing, deviceMac]);
+
+  // Bypass client-side validation — submit the raw token to the backend.
+  // Use when the pre-check falsely rejects a valid token (e.g. v2 short keyset).
+  const handleCashuPayAnyway = useCallback(async () => {
+    if (!cashuToken.trim() || !pricing) return;
+    setCashuPaying(true);
+    setCashuError('');
+    try {
+      const result: PaymentResult = await payCashu(cashuToken.trim(), deviceMac || undefined);
+      if (result.ok) {
+        setGrantedText(formatAllotment(result.session.metric, result.session.allotment));
+        setPhase('success');
+      } else {
+        setCashuError(result.error.message);
+      }
+    } catch (err: any) {
+      setCashuError(err.message || 'Payment failed');
+    } finally {
+      setCashuPaying(false);
+    }
+  }, [cashuToken, pricing, deviceMac]);
 
   const handleGenerateInvoice = useCallback(async () => {
     if (!pricing) return;
@@ -248,7 +314,7 @@ export default function CaptivePortal() {
     setLnGenerated(false);
     setLnTestMint(false);
     try {
-      const res = await createLnInvoice(selectedSats, pricing.mintUrl);
+      const res = await createLnInvoice(selectedSats, selectedMintUrl || pricing.mintUrl, deviceMac || undefined);
       if (res.status === 0 || res.error) {
         setLnError(res.error || 'Failed to create invoice');
         setLnGenerating(false);
@@ -275,7 +341,7 @@ export default function CaptivePortal() {
 
       pollRef.current = window.setInterval(async () => {
         try {
-          const poll = await pollLnInvoice(res.quote);
+          const poll = await pollLnInvoice(res.quote, deviceMac || undefined);
           if (poll.access_granted) {
             if (pollRef.current) clearInterval(pollRef.current);
             setLnPolling(false);
@@ -294,10 +360,23 @@ export default function CaptivePortal() {
       setLnError(err.message || 'Invoice creation failed');
       setLnGenerating(false);
     }
-  }, [pricing, selectedSats]);
+  }, [pricing, selectedSats, selectedMintUrl, deviceMac]);
 
   const isCashuValid = cashuValidation?.valid === true;
   const metric = pricing?.metric || 'milliseconds';
+  // Minimum payable threshold: a token must cover at least the advertised
+  // minimum steps (default 1), otherwise Continue stays disabled and the user
+  // gets a clear "not enough" message instead of a silent no-op. Kept in sync
+  // with the "Minimum: N sats (Z)" hint rendered above the input and enforced
+  // again inside handleCashuPay.
+  const payable = isTokenPayable({
+    minSteps: pricing?.minSteps,
+    pricePerStep: pricing?.pricePerStep,
+    amount: cashuValidation?.amount,
+  });
+  const isCashuPayable = isCashuValid && payable.payable;
+  const minStepsEff = payable.minSteps;
+  const minSats = payable.minSats;
 
   const loadingHeader = (
     <div className="tollgate-captive-portal-header">
@@ -374,7 +453,7 @@ export default function CaptivePortal() {
                   <p className="small">Redirecting to your dashboard…</p>
                 </div>
                 <a
-                  href={`http://${window.location.hostname}:8090/net4sats/balance.html`}
+                  href={`http://${window.location.hostname}:8090/balance.html`}
                   style={{
                     display: 'inline-block',
                     marginTop: '1rem',
@@ -389,6 +468,29 @@ export default function CaptivePortal() {
                 >
                   Go to dashboard →
                 </a>
+              </div>
+            </div>
+          </div>
+        </div>
+        {footer}
+      </div>
+    );
+  }
+
+  if (phase === 'setup') {
+    return (
+      <div className="tollgate-captive-portal">
+        {loadingHeader}
+        <div className="tollgate-captive-portal-content">
+          <div className="tollgate-captive-portal-content-container">
+            <div className="tollgate-captive-portal-tabs" role="tablist">
+              <button className="tollgate-captive-portal-tabs-tab tollgate-captive-portal-tabs-tab-lightning" data-active="true" role="tab">⚡ Lightning</button>
+              <button className="tollgate-captive-portal-tabs-tab tollgate-captive-portal-tabs-tab-cashu" data-active="false" role="tab">🥜 Cashu</button>
+            </div>
+            <div className="tollgate-captive-portal-view">
+              <div className="tollgate-captive-portal-loading">
+                <div className="cp-spinner big" />
+                <span>{setupMessage}</span>
               </div>
             </div>
           </div>
@@ -417,7 +519,7 @@ export default function CaptivePortal() {
         </div>
       )}
 
-      {!pageError && pricing && (
+      {!pageError && pricing && tab === 'lightning' && (
         <div style={{ textAlign: 'center', padding: '0 1rem 0.5rem' }}>
           <p style={{ fontSize: '1.2rem', color: '#fff', fontWeight: 700 }}>How much Internet would you like to buy?</p>
           <p style={{ margin: '0.2rem 0 0', fontSize: '0.75rem', color: 'rgba(255,255,255,0.4)' }}>
@@ -428,7 +530,7 @@ export default function CaptivePortal() {
 
       <div className="tollgate-captive-portal-content">
         <div className="tollgate-captive-portal-content-container">
-          {!pageError && pricing && (
+          {!pageError && pricing && tab === 'lightning' && (
             <>
               <div className="size-choices">
                 {sizeOptions.map((opt, idx) => (
@@ -467,8 +569,12 @@ export default function CaptivePortal() {
             <button
               className="tollgate-captive-portal-tabs-tab tollgate-captive-portal-tabs-tab-lightning"
               data-active={tab === 'lightning' ? 'true' : 'false'}
+              data-disabled={pricing && !pricing.supportsLN ? 'true' : 'false'}
               role="tab"
-              onClick={() => setTab('lightning')}
+              aria-disabled={pricing ? !pricing.supportsLN : false}
+              disabled={pricing ? !pricing.supportsLN : false}
+              onClick={() => { if (!pricing || pricing.supportsLN) setTab('lightning'); }}
+              title={pricing && !pricing.supportsLN ? 'Lightning is not available for this mint' : undefined}
             >
               ⚡ Lightning
             </button>
@@ -574,16 +680,50 @@ export default function CaptivePortal() {
                   </h2>
                 </div>
 
-                <div className="tollgate-captive-portal-method-input" style={{ textAlign: 'center', padding: '1.2rem', border: 'none' }}>
-                  <div style={{ fontSize: '2rem', fontWeight: 700, color: '#0a0a0a' }}>
-                    {formatSats(selectedSats)}
+                {pricing && (
+                  <div
+                    style={{
+                      margin: '0.25rem 0 0.75rem',
+                      padding: '0.6rem 0.9rem',
+                      background: 'rgba(0,0,0,0.03)',
+                      border: '1px solid rgba(0,0,0,0.08)',
+                      borderRadius: 'var(--border-radius, 12px)',
+                      fontSize: 'var(--font-size-small, 0.9rem)',
+                      textAlign: 'center',
+                      lineHeight: 1.45,
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, color: 'rgba(0,0,0,0.65)' }}>
+                      Rate: {pricing.pricePerStep} {pricing.pricePerStep === 1 ? 'sat' : 'sats'} per{' '}
+                      {formatAllotment(pricing.metric, pricing.stepSize)}
+                    </div>
+                    {pricing.minSteps > 1 && (
+                      <div style={{ fontSize: 'var(--font-size-xsmall)', color: 'rgba(0,0,0,0.45)' }}>
+                        Minimum: {pricing.minSteps * pricing.pricePerStep} sats (
+                        {formatAllotment(pricing.metric, pricing.minSteps * pricing.stepSize)})
+                      </div>
+                    )}
                   </div>
-                </div>
+                )}
 
                 {cashuError && (
                   <div className="error-msg">
                     <div className="dot" />
                     <span>{cashuError}</span>
+                  </div>
+                )}
+                {/* When validation failed, offer a bypass path — the backend
+                    can decode v2 keysets that cashu-ts rejects client-side. */}
+                {cashuError && cashuToken && (
+                  <div style={{ textAlign: 'center', marginTop: '0.5rem' }}>
+                    <button
+                      className="ghost"
+                      disabled={cashuPaying}
+                      onClick={handleCashuPayAnyway}
+                      style={{ fontSize: 'var(--font-size-small, 0.85rem)' }}
+                    >
+                      {cashuPaying ? 'Processing…' : 'Submit anyway — the router will validate it'}
+                    </button>
                   </div>
                 )}
 
@@ -605,6 +745,28 @@ export default function CaptivePortal() {
                     <button className="ghost">QR</button>
                   </div>
                 </div>
+
+                {/* Gap A — empty-state hint: clearly prompt the operator to paste e-cash
+                    before they've entered anything. Shows only when no token, no result,
+                    no error yet. */}
+                {!cashuToken && !cashuValidation && !cashuError && (
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                      margin: '0.5rem 0',
+                      padding: '0.7rem 0.9rem',
+                      background: 'rgba(0,0,0,0.04)',
+                      border: '1px dashed rgba(0,0,0,0.2)',
+                      borderRadius: 'var(--border-radius, 12px)',
+                      color: 'rgba(0,0,0,0.55)',
+                      fontSize: 'var(--font-size-small, 0.9rem)',
+                    }}
+                  >
+                    <span>Please paste some ecash to see what it buys.</span>
+                  </div>
+                )}
 
                 {isCashuValid && cashuValidation?.amount != null && (
                   <div
@@ -636,18 +798,96 @@ export default function CaptivePortal() {
                     </svg>
                     <span>
                       Valid Cashu token — {formatSats(cashuValidation.amount)}
+                      {pricing && isCashuPayable && (() => {
+                        const steps = Math.floor(cashuValidation.amount / pricing.pricePerStep);
+                        const allotment = steps * pricing.stepSize;
+                        return allotment > 0
+                          ? ` — buys you ${formatAllotment(pricing.metric, allotment)}`
+                          : '';
+                      })()}
                     </span>
                   </div>
                 )}
 
-                {pricing?.mintUrl && (
-                  <p style={{ fontSize: 'var(--font-size-xsmall)', color: 'rgba(0,0,0,0.35)', textAlign: 'center' }}>
-                    Accepted mint: {pricing.mintUrl}
-                  </p>
+                {/* Gap B — below-minimum token: valid but not enough to buy the minimum
+                    purchase. Show an amber warning and keep Continue disabled. */}
+                {isCashuValid && !isCashuPayable && pricing && (
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                      margin: '0.5rem 0',
+                      padding: '0.7rem 0.9rem',
+                      background: '#fff7e6',
+                      border: '1px solid #ff9f0a',
+                      borderRadius: 'var(--border-radius, 12px)',
+                      color: '#9a6200',
+                      fontSize: 'var(--font-size-small, 0.9rem)',
+                      fontWeight: 600,
+                    }}
+                  >
+                    <span>
+                      Token pays {formatSats(cashuValidation.amount!)} — not enough for a
+                      minimum purchase (min {minSats} sats /{' '}
+                      {formatAllotment(pricing.metric, minStepsEff * pricing.stepSize)}). Paste a larger token.
+                    </span>
+                  </div>
+                )}
+
+                {/* Bypass button for below-min tokens — user may want to submit
+                    a token that's below the minimum purchase anyway (the backend
+                    might accept partial value or the user may understand the limit). */}
+                {isCashuValid && !isCashuPayable && pricing && (
+                  <div style={{ textAlign: 'center', marginTop: '0.5rem' }}>
+                    <button
+                      className="ghost"
+                      disabled={cashuPaying}
+                      onClick={handleCashuPayAnyway}
+                      style={{ fontSize: 'var(--font-size-small, 0.85rem)' }}
+                    >
+                      {cashuPaying ? 'Processing…' : 'Submit anyway — the router will validate it'}
+                    </button>
+                  </div>
+                )}
+
+                {pricing?.mintUrls && pricing.mintUrls.length > 0 && (
+                  <div style={{ textAlign: 'center', marginTop: '0.5rem' }}>
+                    <p style={{ fontSize: 'var(--font-size-xsmall)', color: 'rgba(0,0,0,0.35)', marginBottom: '0.3rem' }}>
+                      Accepted mint:
+                    </p>
+                    <select
+                      value={selectedMintUrl}
+                      onChange={(e) => {
+                        setSelectedMintUrl(e.target.value);
+                        setLnInvoice('');
+                        setLnGenerated(false);
+                        setLnGenerating(false);
+                        setLnTestMint(false);
+                        setLnError('');
+                      }}
+                      style={{
+                        fontSize: 'var(--font-size-small, 0.85rem)',
+                        padding: '0.3rem 0.5rem',
+                        borderRadius: '6px',
+                        border: '1px solid rgba(0,0,0,0.15)',
+                        background: '#fff',
+                        color: '#0a0a0a',
+                        cursor: 'pointer',
+                        maxWidth: '100%',
+                      }}
+                    >
+                      {pricing.mintUrls.map((url) => {
+                        let label = url;
+                        try { label = new URL(url).hostname; } catch {}
+                        return <option key={url} value={url}>{label}</option>;
+                      })}
+                    </select>
+                  </div>
                 )}
 
                 <div className="tollgate-captive-portal-method-submit" style={{ marginTop: '1.5rem' }}>
-                  <button disabled={!isCashuValid || cashuPaying} onClick={handleCashuPay}>
+                  <button disabled={!isCashuPayable || cashuPaying} onClick={handleCashuPay}>
                     {cashuPaying ? 'Processing…' : 'Continue'}
                   </button>
                 </div>

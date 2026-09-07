@@ -129,7 +129,7 @@ export default function BalancePage() {
           <div class="balance-card">
             <div class="balance-no-session">
               <p>No active session found.</p>
-              <a class="cta-btn" href="splash.html">
+              <a class="cta-btn" href={`http://${window.location.hostname}:2050/`}>
                 Get Access
               </a>
             </div>

@@ -76,22 +76,7 @@ else
     fi
 fi
 
-# --- Existing service configuration (uhttpd / NoDogSplash / restarts) ---
-
-if ! uci -q get uhttpd.net4sats >/dev/null 2>&1; then
-    echo "Adding uhttpd net4sats section for admin SPA on :80"
-    uci set uhttpd.net4sats=uhttpd
-    uci set uhttpd.net4sats.home='/www'
-    uci set uhttpd.net4sats.ubus_prefix='/ubus'
-    uci set uhttpd.net4sats.script_timeout='60'
-    uci set uhttpd.net4sats.network_timeout='30'
-    uci set uhttpd.net4sats.max_requests='3'
-    uci set uhttpd.net4sats.tcp_keepalive='1'
-    uci set uhttpd.net4sats.error_page='/net4sats/index.html'
-    uci add_list uhttpd.net4sats.listen_http='0.0.0.0:80'
-    uci add_list uhttpd.net4sats.listen_http='[::]:80'
-    uci commit uhttpd
-fi
+# --- Existing service configuration (NoDogSplash / restarts) ---
 
 echo "Configuring NoDogSplash for captive portal on :2050..."
 if uci -q get nodogsplash.@nodogsplash[0] >/dev/null 2>&1; then
@@ -103,6 +88,16 @@ if uci -q get nodogsplash.@nodogsplash[0] >/dev/null 2>&1; then
     uci commit nodogsplash
 fi
 
+# Repoint the uhttpd.portal instance (set up by tollgate-wrt on :2051)
+# at our captive portal SPA instead of tollgate-wrt's default portal.
+# We do NOT touch /etc/nodogsplash/htdocs — that redirect stub is owned
+# by tollgate-wrt's 90-tollgate-captive-portal-symlink script.
+if uci -q get uhttpd.portal >/dev/null 2>&1; then
+    echo "Repointing uhttpd.portal home to net4sats captive portal..."
+    uci set uhttpd.portal.home='/etc/tollgate/net4sats-captive-portal-site'
+    uci commit uhttpd
+fi
+
 echo "Resolving .apk-new files from previous installs..."
 find /etc/tollgate/net4sats-captive-portal-site /www/net4sats -name '*.apk-new' \
     -exec sh -c 'mv "$1" "${1%.apk-new}"' _ {} \;
@@ -112,14 +107,6 @@ echo "Restarting rpcd..."
 
 echo "Restarting uhttpd..."
 /etc/init.d/uhttpd restart
-
-# Point NoDogSplash at the net4sats captive portal. tollgate-wrt makes
-# /etc/nodogsplash/htdocs a symlink to its own portal dir; repoint it at ours.
-if [ -d /etc/tollgate/net4sats-captive-portal-site ]; then
-    echo "Pointing NoDogSplash htdocs at net4sats captive portal..."
-    rm -rf /etc/nodogsplash/htdocs
-    ln -s /etc/tollgate/net4sats-captive-portal-site /etc/nodogsplash/htdocs
-fi
 
 echo "Restarting NoDogSplash..."
 /etc/init.d/nodogsplash restart 2>/dev/null || true

@@ -118,9 +118,31 @@ export function validateCashuToken(token: string): CashuValidationResult {
   try {
     decoded = getDecodedToken(trimmed, []);
   } catch {
+    // getDecodedToken can fail for two reasons:
+    // 1. Actually corrupted / malformed token (rare)
+    // 2. v2/v4 short keyset IDs without known keysets — the
+    //    empty `[]` keyset list means cashu-ts can't expand
+    //    short keyset IDs, so it throws. The token itself may
+    //    be perfectly valid — the backend (tollgate-module-basic-go)
+    //    uses gonuts' DecodeToken which handles short keysets
+    //    natively. See: client-privacy-separation AGENTS.md
+    //    boundary.
+    if (trimmed.startsWith('cashuB')) {
+      // v4 CBOR token — the empty keyset list is likely the issue.
+      return {
+        valid: false,
+        error:
+          'This token uses a short keyset ID that the portal cannot ' +
+          'decode without keyset data from the mint. The token is ' +
+          'likely valid — submit it anyway or try one from a different mint.',
+      };
+    }
     return {
       valid: false,
-      error: 'Could not decode this token. It may be corrupted or unsupported.',
+      error:
+        'Could not decode this token. It may use an unsupported ' +
+        'format or be corrupted. Submit it anyway — the router will ' +
+        'validate it.',
     };
   }
 

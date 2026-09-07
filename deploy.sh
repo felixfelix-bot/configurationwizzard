@@ -11,6 +11,14 @@ echo "Deploying admin to $ROUTER..."
 ssh "$REMOTE_USER@$ROUTER" "mkdir -p /www/net4sats"
 scp -r dist/admin/. "$REMOTE_USER@$ROUTER:/www/net4sats/"
 
+# Deploy balance page to admin panel (if built separately)
+if [ -d dist/balance ]; then
+  echo "Deploying balance page to $ROUTER..."
+  scp dist/balance/balance.html "$REMOTE_USER@$ROUTER:/www/net4sats/balance.html" 2>/dev/null || true
+  ssh "$REMOTE_USER@$ROUTER" "mkdir -p /www/net4sats/assets"
+  scp dist/balance/assets/balance-*.js dist/balance/assets/balance-*.css "$REMOTE_USER@$ROUTER:/www/net4sats/assets/" 2>/dev/null || true
+fi
+
 echo "Deploying captive portal to $ROUTER..."
 ssh "$REMOTE_USER@$ROUTER" "mkdir -p /etc/tollgate/net4sats-captive-portal-site"
 scp -r dist/portal/. "$REMOTE_USER@$ROUTER:/etc/tollgate/net4sats-captive-portal-site/"
