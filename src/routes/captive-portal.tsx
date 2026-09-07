@@ -13,6 +13,7 @@ import {
 } from '../lib/payment-api';
 import { generateQRSVG } from '../lib/qr';
 import { validateCashuToken, type CashuValidationResult } from '../lib/cashu-validate';
+import { isTokenPayable } from '../lib/cashu-payable';
 
 type Tab = 'lightning' | 'cashu';
 type PortalPhase = 'loading' | 'select' | 'success' | 'error' | 'setup';
@@ -265,7 +266,7 @@ export default function CaptivePortal() {
   }, [handleCashuInput]);
 
   const handleCashuPay = useCallback(async () => {
-    if (!cashuValidation?.valid || !pricing) return;
+    if (!cashuValidation?.valid || !pricing || !isCashuPayable) return;
     setCashuPaying(true);
     setCashuError('');
     try {
@@ -341,6 +342,19 @@ export default function CaptivePortal() {
 
   const isCashuValid = cashuValidation?.valid === true;
   const metric = pricing?.metric || 'milliseconds';
+  // Minimum payable threshold: a token must cover at least the advertised
+  // minimum steps (default 1), otherwise Continue stays disabled and the user
+  // gets a clear "not enough" message instead of a silent no-op. Kept in sync
+  // with the "Minimum: N sats (Z)" hint rendered above the input and enforced
+  // again inside handleCashuPay.
+  const payable = isTokenPayable({
+    minSteps: pricing?.minSteps,
+    pricePerStep: pricing?.pricePerStep,
+    amount: cashuValidation?.amount,
+  });
+  const isCashuPayable = isCashuValid && payable.payable;
+  const minStepsEff = payable.minSteps;
+  const minSats = payable.minSats;
 
   const loadingHeader = (
     <div className="tollgate-captive-portal-header">
@@ -696,6 +710,28 @@ export default function CaptivePortal() {
                   </div>
                 </div>
 
+                {/* Gap A — empty-state hint: clearly prompt the operator to paste e-cash
+                    before they've entered anything. Shows only when no token, no result,
+                    no error yet. */}
+                {!cashuToken && !cashuValidation && !cashuError && (
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                      margin: '0.5rem 0',
+                      padding: '0.7rem 0.9rem',
+                      background: 'rgba(0,0,0,0.04)',
+                      border: '1px dashed rgba(0,0,0,0.2)',
+                      borderRadius: 'var(--border-radius, 12px)',
+                      color: 'rgba(0,0,0,0.55)',
+                      fontSize: 'var(--font-size-small, 0.9rem)',
+                    }}
+                  >
+                    <span>Please paste some ecash to see what it buys.</span>
+                  </div>
+                )}
+
                 {isCashuValid && cashuValidation?.amount != null && (
                   <div
                     className="cashu-success-msg"
@@ -726,13 +762,39 @@ export default function CaptivePortal() {
                     </svg>
                     <span>
                       Valid Cashu token — {formatSats(cashuValidation.amount)}
-                      {pricing && (() => {
+                      {pricing && isCashuPayable && (() => {
                         const steps = Math.floor(cashuValidation.amount / pricing.pricePerStep);
                         const allotment = steps * pricing.stepSize;
                         return allotment > 0
                           ? ` — buys you ${formatAllotment(pricing.metric, allotment)}`
                           : '';
                       })()}
+                    </span>
+                  </div>
+                )}
+
+                {/* Gap B — below-minimum token: valid but not enough to buy the minimum
+                    purchase. Show an amber warning and keep Continue disabled. */}
+                {isCashuValid && !isCashuPayable && pricing && (
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                      margin: '0.5rem 0',
+                      padding: '0.7rem 0.9rem',
+                      background: '#fff7e6',
+                      border: '1px solid #ff9f0a',
+                      borderRadius: 'var(--border-radius, 12px)',
+                      color: '#9a6200',
+                      fontSize: 'var(--font-size-small, 0.9rem)',
+                      fontWeight: 600,
+                    }}
+                  >
+                    <span>
+                      Token pays {formatSats(cashuValidation.amount!)} — not enough for a
+                      minimum purchase (min {minSats} sats /{' '}
+                      {formatAllotment(pricing.metric, minStepsEff * pricing.stepSize)}). Paste a larger token.
                     </span>
                   </div>
                 )}
@@ -773,7 +835,7 @@ export default function CaptivePortal() {
                 )}
 
                 <div className="tollgate-captive-portal-method-submit" style={{ marginTop: '1.5rem' }}>
-                  <button disabled={!isCashuValid || cashuPaying} onClick={handleCashuPay}>
+                  <button disabled={!isCashuPayable || cashuPaying} onClick={handleCashuPay}>
                     {cashuPaying ? 'Processing…' : 'Continue'}
                   </button>
                 </div>
