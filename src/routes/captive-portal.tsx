@@ -267,6 +267,7 @@ export default function CaptivePortal() {
 
   const handleCashuPay = useCallback(async () => {
     if (!cashuValidation?.valid || !pricing || !isCashuPayable) return;
+    if (!cashuToken.trim()) return;
     setCashuPaying(true);
     setCashuError('');
     try {
@@ -283,6 +284,27 @@ export default function CaptivePortal() {
       setCashuPaying(false);
     }
   }, [cashuToken, cashuValidation, pricing, deviceMac]);
+
+  // Bypass client-side validation — submit the raw token to the backend.
+  // Use when the pre-check falsely rejects a valid token (e.g. v2 short keyset).
+  const handleCashuPayAnyway = useCallback(async () => {
+    if (!cashuToken.trim() || !pricing) return;
+    setCashuPaying(true);
+    setCashuError('');
+    try {
+      const result: PaymentResult = await payCashu(cashuToken.trim(), deviceMac || undefined);
+      if (result.ok) {
+        setGrantedText(formatAllotment(result.session.metric, result.session.allotment));
+        setPhase('success');
+      } else {
+        setCashuError(result.error.message);
+      }
+    } catch (err: any) {
+      setCashuError(err.message || 'Payment failed');
+    } finally {
+      setCashuPaying(false);
+    }
+  }, [cashuToken, pricing, deviceMac]);
 
   const handleGenerateInvoice = useCallback(async () => {
     if (!pricing) return;
@@ -690,6 +712,20 @@ export default function CaptivePortal() {
                     <span>{cashuError}</span>
                   </div>
                 )}
+                {/* When validation failed, offer a bypass path — the backend
+                    can decode v2 keysets that cashu-ts rejects client-side. */}
+                {cashuError && cashuToken && (
+                  <div style={{ textAlign: 'center', marginTop: '0.5rem' }}>
+                    <button
+                      className="ghost"
+                      disabled={cashuPaying}
+                      onClick={handleCashuPayAnyway}
+                      style={{ fontSize: 'var(--font-size-small, 0.85rem)' }}
+                    >
+                      {cashuPaying ? 'Processing…' : 'Submit anyway — the router will validate it'}
+                    </button>
+                  </div>
+                )}
 
                 <div className="tollgate-captive-portal-method-input">
                   <input
@@ -796,6 +832,22 @@ export default function CaptivePortal() {
                       minimum purchase (min {minSats} sats /{' '}
                       {formatAllotment(pricing.metric, minStepsEff * pricing.stepSize)}). Paste a larger token.
                     </span>
+                  </div>
+                )}
+
+                {/* Bypass button for below-min tokens — user may want to submit
+                    a token that's below the minimum purchase anyway (the backend
+                    might accept partial value or the user may understand the limit). */}
+                {isCashuValid && !isCashuPayable && pricing && (
+                  <div style={{ textAlign: 'center', marginTop: '0.5rem' }}>
+                    <button
+                      className="ghost"
+                      disabled={cashuPaying}
+                      onClick={handleCashuPayAnyway}
+                      style={{ fontSize: 'var(--font-size-small, 0.85rem)' }}
+                    >
+                      {cashuPaying ? 'Processing…' : 'Submit anyway — the router will validate it'}
+                    </button>
                   </div>
                 )}
 
