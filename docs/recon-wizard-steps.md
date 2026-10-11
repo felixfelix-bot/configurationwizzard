@@ -261,6 +261,21 @@ far as the single `#select-view` card is concerned — once Deploy is clicked, `
 | **A — `#steps-list` container** | `index.html:219`; renderer `index.html:481-493` | one `.step` row per sub-step, icon driven by `status` | a *progress list*, not a navigable stepper |
 | **B — `StepId` array + stepper** | `8dca7fb` `src/routes/setup.tsx:50-58` (5 ids `mints,pricing,profit,wifi,review`), stepper `<ol class="wizard-stepper">` `setup.tsx:337-351`, per-step body `setup.tsx:354-418`, nav `setup.tsx:421-457` | the only genuine component-based wizard with `data-testid`s | **not present in this clone** (`git cat-file -t 8dca7fb` → fatal); quoted from `docs/recon/wizard-step-table.md:145-206` |
 
+**Acceptance-criterion note (card criterion 2 — “every selector cited exists in the repo today, or is
+explicitly marked absent”).** No selector cited in this document exists inside the `configurationwizzard`
+worktree as a *product* selector: at `d7ea21f` this repo has no wizard, no `src/routes/setup.tsx`, and no
+component carrying any of these ids. Every `[id=…]` in §3/§4 is therefore labelled with the surface it
+does exist in — implementation A (`~/repos/net4sats-wizard-go` @ `f840385`, `index.html`), where the two
+harness specs already assert on it. Against this worktree those selectors are `[absent]`, and
+`data-testid` is `[absent]` in all three surfaces (§7.2).
+
+The ids that *do* exist in the named repo today are the **mockup** ones in row 2 above plus
+`mockup/setup.html:543-672`: `#pwField`,`#pw`,`#pwStrength`,`#pw2Field`,`#pw2`,`#s1next`,`#cableList`,
+`#wifiList`,`#s2next`,`#s3next`,`#type-time`,`#type-data`,`#priceTime`,`#pricePerMin`,`#minTime`,
+`#priceData`,`#pricePerMb`,`#s6Icon`,`#summaryTable` — mockup-only chrome, not the product flow. Note one
+**collision**: `#lnurl` exists in *both* surfaces as a **different element** (`mockup/setup.html:589`
+vs A's `index.html:183`), so any spec must pin the surface *and* the revision before selecting on it.
+
 ---
 
 ## 7. Not implemented / open questions
