@@ -12,9 +12,12 @@
 | Product repo `~/repos/configurationwizzard` | `994a142` (branch `feature/upstream-wifi-scan`) | contains no test harness of its own (§2.3) |
 
 A second, *stale* checkout of the same harness repo exists at `~/repos/physical-router-test-automation`
-(30 files in `tests/browser/`, missing `wifi-scan-proof.spec.mjs`, `wizard-deploy-e2e.spec.mjs`,
-`tollgate-installer-mt6000.*`). It is **not** the harness; do not cite it. The authoritative checkout is
-`~/physical-router-test-automation` (67 entries in `tests/browser/`).
+(HEAD `e2418eb`, committed **2026-08-18**, 25 entries in `tests/browser/`, no `wifi-scan-proof.spec.mjs`,
+no `wizard-deploy-e2e.spec.mjs`, no `tollgate-installer-mt6000.*`, `tests/playwright.config.mjs` shorter so
+its `baseURL` sits at line 38 rather than 62). It is **not** the harness; do not cite it. The authoritative
+checkout is `~/physical-router-test-automation` (`b8448069`, **2026-10-07**, 67 entries in `tests/browser/`).
+`~/repos/physical-router-test-automation` also carries 36 uncommitted files belonging to other work — another
+reason not to treat it as a reference.
 
 ## 1. What `schedule.md` says about the harness — and what it does not
 
@@ -381,3 +384,21 @@ that there (`:25`) and `wizard-deploy-e2e.spec.mjs` was written against
 4. `ROUTER_PASSWORD= ''` in `endo-onboarding.spec.mjs:26` plus the in-body `'default-pass'` fallback (`:63,90`)
    can produce a fake-green run against a device whose password happens to match. Remove the fallback when
    the spec is adapted.
+
+## 11. Relationship to the other recon notes on this branch
+
+- `docs/recon/wizard-step-table.md` (`994a142`) — the wizard's 7-step flow, fields and validation. No overlap
+  with this file; both feed the same downstream spec task.
+- `docs/recon/wizard-harness-env.md` (`699b34d`) — an earlier, narrower pass over the same subject.
+  **This file supersedes it wherever they disagree.** Three of its claims no longer hold against the tree:
+  1. it reports `config/routers.json` as **not existing** (only `config/routers.example.json` and
+     `...lab-backup.json`). The file exists today and is the default inventory path
+     (`tests/helpers/inventory.mjs:4`); that is exactly what turns §6 from "no resolver" into an answer.
+  2. it cites `.env.example:7` as `http://192.168.13.112:8080` and `.env.example:30,34` as real lab addresses.
+     The file has since been scrubbed to `<ip>` / `<redacted>` placeholders (§9).
+  3. its `file:line` citations are lines of the **stale** checkout — `tests/playwright.config.mjs:38` for
+     `baseURL` (today `:62`), and defect rows naming `_probe-wizard.mjs`, `feed-per-arch-e2e.spec.mjs`,
+     `admin-config-ui.spec.mjs`, `inspect-glinet.mjs`, none of which exist at `b8448069`. Re-derive every line
+     number against §0's revision before acting on those rows.
+
+  Nothing else in the older notes that I could check contradicts the code evidence recorded here.
