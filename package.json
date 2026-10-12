@@ -16,6 +16,8 @@
     "demo": "VITE_MOCK=true VITE_APP=admin vite",
     "build:demo": "VITE_MOCK=true VITE_APP=admin vite build",
     "build:pages": "VITE_MOCK=true VITE_BASE_PATH=/configurationwizzard/ node scripts/build-pages.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
     "postinstall": "node -e \"const p=require('path').join(process.cwd(),'node_modules/zimmerframe/package.json');const d=require('fs').readFileSync(p,'utf8');const j=JSON.parse(d);j.main='./src/walk.js';j.exports['.'].require='./src/walk.js';require('fs').writeFileSync(p,JSON.stringify(j,null,2))\""
   },
   "repository": {
@@ -37,6 +39,7 @@
     "vite": "^8.0.12"
   },
   "devDependencies": {
-    "@preact/preset-vite": "^2.10.5"
+    "@preact/preset-vite": "^2.10.5",
+    "vitest": "^4.1.11"
   }
 }
